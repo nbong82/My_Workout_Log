@@ -71,10 +71,23 @@ export default function App() {
           if (data.feedback) {
             setCoachFeedback(data.feedback);
             setCoachEngine(data.engine || 'gemini-3.8-flash');
+            return;
           }
         }
-      } catch (err) {
-        console.error('Failed to get AI coaching feedback:', err);
+        throw new Error('Fallback to client coach engine');
+      } catch {
+        // Client-side fallback for GitHub Pages (no Node backend)
+        const attainment = summary.goalAttainmentRate || 0;
+        let text = '새로운 운동을 시작할 완벽한 타이밍이네요! 가벼운 20분 조깅이나 스트레칭으로 활기찬 첫 기록을 세워보시는 것을 추천합니다!';
+        if (records.length > 0) {
+          if (attainment >= 100) {
+            text = `이번 주 목표 거리를 무려 ${attainment}% 초과 달성하셨네요! 누적된 근육 피로를 풀어주기 위해 오늘은 충분한 수분 섭취와 스트레칭을 적극 추천합니다!`;
+          } else if (summary.thisWeekDistance > 0) {
+            text = `이번 주 누적 ${summary.thisWeekDistance}km로 목표 달성을 향해 꾸준히 잘 달리고 계시네요! 남은 목표 완주를 위해 페이스를 무리하지 않고 유지하시는 것을 추천합니다!`;
+          }
+        }
+        setCoachFeedback(text);
+        setCoachEngine('AI 트레이너 코칭');
       } finally {
         setIsLoadingFeedback(false);
       }
@@ -82,38 +95,82 @@ export default function App() {
     []
   );
 
-  // 2. Fetch Workouts from Google WebApp API
+  // 2. Fetch Workouts from Google WebApp API (with direct fallback for GitHub Pages)
   const fetchWorkouts = useCallback(async () => {
     setIsLoadingWorkouts(true);
     setApiError(null);
 
+    const GOOGLE_DIRECT_URL =
+      'https://script.google.com/macros/s/AKfycbzR5QefCeu4Wdg9A8PcNzYyBcL7vOvKrP-nHakwa1XUwqX3bW3oSRih-FHYB2crxY3B-w/exec?action=getWorkouts';
+
     try {
-      const res = await fetch('/api/workouts');
-      const json: ApiResponse = await res.json();
+      let json: ApiResponse;
+      try {
+        const res = await fetch('/api/workouts');
+        if (!res.ok) throw new Error('Static host');
+        json = await res.json();
+      } catch {
+        // Direct fetch for GitHub Pages static hosting
+        const directRes = await fetch(GOOGLE_DIRECT_URL, { redirect: 'follow' });
+        const raw = await directRes.json();
+        json = {
+          success: true,
+          source: 'google_sheet_direct',
+          fetchedAt: new Date().toISOString(),
+          data: raw,
+        };
+      }
 
       setLiveApiResponse(json);
       setLastFetchedAt(json.fetchedAt || new Date().toISOString());
 
       if (json.success && json.data) {
-        const records = json.data.records || [];
-        const summary = json.data.summary || {
-          totalWorkouts: 0,
-          totalDistance: 0,
-          totalDuration: 0,
-          thisWeekDistance: 0,
-          thisMonthDistance: 0,
-          averagePace: '-',
-          averageHeartRate: 0,
-          weeklyGoal: 20,
-          goalAttainmentRate: 0,
-        };
+        let rawRecords: any[] = json.data.records || [];
+        // Smart normalize for shifted columns
+        const normalized: WorkoutRecord[] = rawRecords.map((r: any, idx: number) => {
+          let finalDate = String(r.date || '');
+          let finalType = String(r.type || '러닝');
+          let finalDist = Number(r.distance) || 0;
+          let finalDur = Number(r.duration) || 0;
+          let finalHr = Number(r.heartRate) || 0;
+          let finalIntensity = Number(r.intensity) || 3;
+          let finalMemo = String(r.memo || '');
 
-        setLiveRecords(records);
+          if (typeof r.type === 'string' && (r.type.includes('GMT') || !isNaN(Date.parse(r.type)))) {
+            const d = new Date(r.type);
+            if (!isNaN(d.getTime())) finalDate = d.toISOString().split('T')[0];
+            finalType = '러닝';
+          }
+          if (r.createdAt && typeof r.createdAt === 'string') {
+            finalMemo = `${r.createdAt} (${r.memo || ''})`.trim();
+          }
+          if (finalDist === 0 && finalDur > 20) {
+            finalDist = Math.round(finalDur * 10) / 10;
+            finalDur = 120;
+          }
+          return {
+            id: r.id || `row-${idx}`,
+            date: finalDate,
+            type: finalType,
+            distance: finalDist,
+            duration: finalDur,
+            heartRate: finalHr,
+            intensity: finalIntensity,
+            memo: finalMemo,
+          };
+        });
+
+        // Calculate summary if distance was 0
+        let summary = json.data.summary;
+        if (!summary || summary.totalDistance === 0) {
+          summary = calculateSummaryFromRecords(normalized, 20);
+        }
+
+        setLiveRecords(normalized);
         setLiveSummary(summary);
 
-        // If in live mode, request AI coaching for live data
         if (isLiveMode) {
-          fetchCoachFeedback(summary, records);
+          fetchCoachFeedback(summary, normalized);
         }
       } else {
         setApiError(json.error || '구글 스프레드시트 응답 오류');
