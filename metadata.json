@@ -1,0 +1,6 @@
+{
+  "name": "AI 스포츠 트레이너 - 구글 시트 운동 대시보드",
+  "description": "구글 스프레드시트 WebApp API와 실시간 연동하여 최신 운동 기록과 통계를 자동 조회하고 전문 맞춤형 코칭 피드백을 제공하는 AI 피트니스 대시보드",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
